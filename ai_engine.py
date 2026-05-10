@@ -1,5 +1,3 @@
-from google import genai
-from dotenv import load_dotenv
 import os
 import uuid
 import logging
@@ -26,11 +24,6 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-gemini_api_key = os.getenv("GEMINI_API_KEY")
-gemini_client = genai.Client(api_key=gemini_api_key) if gemini_api_key else None
-if not gemini_client:
-    logger.warning("GEMINI_API_KEY not found. Gemini text generation will be skipped.")
-
 groq_api_key = os.getenv("GROQ_API_KEY")
 groq_client = None
 if groq_api_key and OpenAI:
@@ -47,29 +40,16 @@ os.makedirs(GENERATED_DIR, exist_ok=True)
 
 IMAGE_SIZE = (1024, 640)
 WORDS_PER_SECOND = 2.5
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
 MODEL_FALLBACKS = [
-    GEMINI_MODEL,
-    "gemini-flash-latest",
-    "gemini-2.0-flash",
+    GROQ_MODEL,
+    "llama3-70b-8192",
+    "llama3-8b-8192"
 ]
 
 
 def generate_text(prompt):
     last_error = None
-
-    if gemini_client:
-        for model in dict.fromkeys(MODEL_FALLBACKS):
-            try:
-                response = gemini_client.models.generate_content(
-                    model=model,
-                    contents=prompt
-                )
-                return response.text if response and response.text else ""
-            except Exception as e:
-                last_error = e
-                logger.warning(f"Gemini model {model} failed: {e}")
 
     if groq_client:
         try:
@@ -91,7 +71,7 @@ def generate_text(prompt):
 
     if last_error:
         raise last_error
-    raise ValueError("No AI provider is configured. Set GEMINI_API_KEY or GROQ_API_KEY in .env.")
+    raise ValueError("No AI provider is configured. Set GROQ_API_KEY in .env.")
 
 
 def requested_duration_seconds(message, default_seconds=30):
