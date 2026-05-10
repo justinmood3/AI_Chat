@@ -1,33 +1,63 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='1.png') }}">
-    <title>Justin AI</title>
     <title>Login - Justin AI</title>
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
 <body>
-    <div class="container">
-        <h1>🤖 Justin AI</h1>
-        <p>Please sign in to continue</p>
-        <a href="/google_login" class="google-btn">Continue with Google</a>
-        <p>Or</p>
-        <h2>Sign In with Email</h2>
-        <form method="POST" action="/login_email">
-            <input type="email" name="email" placeholder="Email" required><br><br>
-            <input type="password" name="password" placeholder="Password" required><br><br>
-            <button type="submit">Sign In</button>
-        </form>
-        <p>Don't have an account? <a href="/register">Sign Up</a></p>
-        {% with messages = get_flashed_messages() %}
-            {% if messages %}
-                <ul>
-                    {% for message in messages %}
-                        <li>{{ message }}</li>
-                    {% endfor %}
-                </ul>
-            {% endif %}
-        {% endwith %}
-    </div>
+    <main class="auth-page">
+        <section class="auth-hero" aria-label="Justin AI">
+            <div class="brand-row">
+                <div class="brand-mark">J</div>
+                <div>
+                    <h1>Justin AI</h1>
+                    <p>Assistant workspace</p>
+                </div>
+            </div>
+            <div class="auth-copy">
+                <p class="eyebrow">Welcome back</p>
+                <h2>Sign in to continue your conversations.</h2>
+                <p>Keep your chats, generated media, voice tools, and saved threads in one focused workspace.</p>
+            </div>
+        </section>
+
+        <section class="auth-card">
+            <div class="auth-card-header">
+                <p class="eyebrow">Account</p>
+                <h2>Log in</h2>
+            </div>
+
+            {% with messages = get_flashed_messages() %}
+                {% if messages %}
+                    <div class="flash-list">
+                        {% for message in messages %}
+                            <div class="flash-message">{{ message }}</div>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+            {% endwith %}
+
+            <a href="/google_login" class="google-btn">Continue with Google</a>
+
+            <div class="auth-divider"><span>or use email</span></div>
+
+            <form method="POST" action="/login_email" class="auth-form">
+                <label>
+                    <span>Email</span>
+                    <input type="email" name="email" placeholder="you@example.com" autocomplete="email" required>
+                </label>
+                <label>
+                    <span>Password</span>
+                    <input type="password" name="password" placeholder="Enter your password" autocomplete="current-password" required>
+                </label>
+                <button type="submit" class="auth-submit">Sign in</button>
+            </form>
+
+            <p class="auth-switch">No account yet? <a href="/register">Create one</a></p>
+        </section>
+    </main>
 </body>
 </html>
