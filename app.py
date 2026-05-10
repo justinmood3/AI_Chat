@@ -2,7 +2,7 @@ from flask import Flask, render_template, request, redirect, url_for, flash, ses
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_dance.contrib.google import make_google_blueprint, google
 from ai_engine import get_response
-from database import save_chat, get_chats, save_user_google, save_user_email, get_user_by_email, get_user_by_id, check_password, create_thread, get_threads, get_thread, save_user_data, get_user_data
+from database import save_chat, get_user_chats, save_user_google, save_user_email, get_user_by_email, get_user_by_id, check_password, create_thread, get_threads, get_thread, user_owns_thread, save_user_data, get_user_data
 import os
 
 app = Flask(__name__)
@@ -50,10 +50,15 @@ def home():
         welcome_msg = "Hello! I'm Justin AI. How can I help you today?"
         save_chat(thread_id, "", welcome_msg)  # Empty user_msg for system
         threads = get_threads(current_user.id)
-    current_thread_id = session.get('current_thread_id', threads[0][0] if threads else None)
+
+    current_thread_id = session.get('current_thread_id')
+    if not current_thread_id or not user_owns_thread(current_user.id, current_thread_id):
+        current_thread_id = threads[0][0] if threads else None
+        session['current_thread_id'] = current_thread_id
+
     if current_thread_id:
-        chats = get_chats(current_thread_id)
-        current_thread = get_thread(current_thread_id)
+        chats = get_user_chats(current_user.id, current_thread_id)
+        current_thread = get_thread(current_thread_id, current_user.id)
     else:
         chats = []
         current_thread = None
@@ -70,10 +75,11 @@ def new_thread():
 @app.route("/select_thread/<int:thread_id>")
 @login_required
 def select_thread(thread_id):
-    # Verify ownership
-    thread = get_thread(thread_id)
+    thread = get_thread(thread_id, current_user.id)
     if thread:
         session['current_thread_id'] = thread_id
+    else:
+        flash("Chat not found for this account.")
     return redirect(url_for("home"))
 
 @app.route("/login")
@@ -93,6 +99,7 @@ def google_login():
         user_id = save_user_google(google_id, name, email)
         user = User(user_id, google_id, name, email)
         login_user(user)
+        session.pop('current_thread_id', None)
         return redirect(url_for("home"))
     return "Failed to login"
 
@@ -116,6 +123,7 @@ def register():
             user_id = save_user_email(name, email, password)
             user = User(user_id, None, name, email)
             login_user(user)
+            session.pop('current_thread_id', None)
             return redirect(url_for("home"))
         except Exception as e:
             flash(f"An error occurred: {str(e)}")
@@ -137,6 +145,7 @@ def login_email():
     if check_password(user_id, password):
         user = User(user_id, None, name, user_email)
         login_user(user)
+        session.pop('current_thread_id', None)
         return redirect(url_for("home"))
     flash("Invalid password")
     return redirect(url_for("login"))
@@ -156,6 +165,10 @@ def chat():
             threads = get_threads(current_user.id)
             thread_id = threads[0][0] if threads else create_thread(current_user.id)
             session['current_thread_id'] = thread_id
+        elif not user_owns_thread(current_user.id, thread_id):
+            flash("Please select one of your chats before sending a message.")
+            session.pop('current_thread_id', None)
+            return redirect(url_for("home"))
         
         response = get_response(user_msg, thread_id)
         ai_reply = response.get("text") if isinstance(response, dict) else response

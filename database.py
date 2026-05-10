@@ -1,7 +1,13 @@
 import sqlite3
+import os
 from werkzeug.security import generate_password_hash, check_password_hash
 
-conn = sqlite3.connect("database.db", check_same_thread=False)
+DATABASE_PATH = os.getenv("DATABASE_PATH", "database.db")
+database_dir = os.path.dirname(DATABASE_PATH)
+if database_dir:
+    os.makedirs(database_dir, exist_ok=True)
+
+conn = sqlite3.connect(DATABASE_PATH, check_same_thread=False)
 cursor = conn.cursor()
 
 # Migration: add thread_id, media_type, and media_url to chats if not exists
@@ -98,6 +104,17 @@ def save_user_google(google_id, name, email):
     )
     conn.commit()
     cursor.execute("SELECT id FROM users WHERE google_id = ?", (google_id,))
+    user = cursor.fetchone()
+    if user:
+        return user[0]
+
+    # If the email already exists from email/password signup, attach Google to it.
+    cursor.execute(
+        "UPDATE users SET google_id = ?, name = COALESCE(name, ?) WHERE email = ?",
+        (google_id, name, email)
+    )
+    conn.commit()
+    cursor.execute("SELECT id FROM users WHERE email = ?", (email,))
     return cursor.fetchone()[0]
 
 def save_user_email(name, email, password):
@@ -141,7 +158,20 @@ def save_chat(thread_id, user_message, ai_reply, media_type=None, media_url=None
     conn.commit()
 
 def get_chats(thread_id):
-    cursor.execute("SELECT user_message, ai_reply, media_type, media_url FROM chats WHERE thread_id = ? ORDER BY id DESC", (thread_id,))
+    cursor.execute("SELECT user_message, ai_reply, media_type, media_url FROM chats WHERE thread_id = ? ORDER BY id ASC", (thread_id,))
+    return cursor.fetchall()
+
+def get_user_chats(user_id, thread_id):
+    cursor.execute(
+        """
+        SELECT chats.user_message, chats.ai_reply, chats.media_type, chats.media_url
+        FROM chats
+        INNER JOIN threads ON chats.thread_id = threads.id
+        WHERE chats.thread_id = ? AND threads.user_id = ?
+        ORDER BY chats.id ASC
+        """,
+        (thread_id, user_id)
+    )
     return cursor.fetchall()
 
 def create_thread(user_id, title="New Chat"):
@@ -156,9 +186,16 @@ def get_threads(user_id):
     cursor.execute("SELECT id, title, created_at FROM threads WHERE user_id = ? ORDER BY created_at DESC", (user_id,))
     return cursor.fetchall()
 
-def get_thread(thread_id):
-    cursor.execute("SELECT id, title FROM threads WHERE id = ?", (thread_id,))
+def get_thread(thread_id, user_id=None):
+    if user_id is None:
+        cursor.execute("SELECT id, title FROM threads WHERE id = ?", (thread_id,))
+    else:
+        cursor.execute("SELECT id, title FROM threads WHERE id = ? AND user_id = ?", (thread_id, user_id))
     return cursor.fetchone()
+
+def user_owns_thread(user_id, thread_id):
+    cursor.execute("SELECT 1 FROM threads WHERE id = ? AND user_id = ?", (thread_id, user_id))
+    return cursor.fetchone() is not None
 
 def save_user_data(user_id, key, value):
     cursor.execute(
