@@ -1,24 +1,17 @@
-from google import genai
 from dotenv import load_dotenv
 import os
 import uuid
 import logging
 import re
-from dataclasses import dataclass
+
 from database import get_chats
+from language_support import detect_language, language_instruction, localized_message
 from PIL import Image, ImageDraw, ImageFont
-import pyttsx3
+from gtts import gTTS
 
+# MoviePy (optional)
 try:
-    from openai import OpenAI
-except Exception:
-    OpenAI = None
-
-try:
-    try:
-        from moviepy.editor import ImageClip, AudioFileClip
-    except ImportError:
-        from moviepy import ImageClip, AudioFileClip
+    from moviepy.editor import ImageClip, AudioFileClip
     MOVIEPY_AVAILABLE = True
 except Exception:
     MOVIEPY_AVAILABLE = False
@@ -27,140 +20,87 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
-gemini_api_key = os.getenv("GEMINI_API_KEY")
-gemini_client = genai.Client(api_key=gemini_api_key) if gemini_api_key else None
-if not gemini_client:
-    logger.warning("GEMINI_API_KEY not found. Gemini text generation will be skipped.")
+# =========================
+# GROQ CLIENT (PRIMARY)
+# =========================
+from openai import OpenAI
 
 groq_api_key = os.getenv("GROQ_API_KEY")
 groq_client = None
-if groq_api_key and OpenAI:
+
+if groq_api_key:
     groq_client = OpenAI(
         api_key=groq_api_key,
         base_url="https://api.groq.com/openai/v1"
     )
-elif groq_api_key and not OpenAI:
-    logger.warning("GROQ_API_KEY found, but the openai package is not installed.")
+else:
+    logger.warning("GROQ_API_KEY missing!")
 
+# =========================
+# PATHS
+# =========================
 BASE_DIR = os.path.dirname(__file__)
 GENERATED_DIR = os.path.join(BASE_DIR, "static", "generated")
 os.makedirs(GENERATED_DIR, exist_ok=True)
 
 IMAGE_SIZE = (1024, 640)
 WORDS_PER_SECOND = 2.5
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
 GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-versatile")
-AI_PROVIDER = os.getenv("AI_PROVIDER", "groq").strip().lower()
-MODEL_FALLBACKS = [
-    GEMINI_MODEL,
-    "gemini-flash-latest",
-    "gemini-2.0-flash",
-]
-GROQ_MODEL_FALLBACKS = [
-    GROQ_MODEL,
-    "llama-3.3-70b-versatile",
-    "llama3-70b-8192",
-    "llama3-8b-8192",
-]
 
 
-@dataclass
+# =========================
+# ERROR CLASS
+# =========================
 class ProviderFailure(Exception):
-    failures: dict
-
-    def __str__(self):
-        parts = []
-        if "groq" in self.failures:
-            parts.append(f"Groq failed: {self.failures['groq']}")
-        if "gemini" in self.failures:
-            parts.append(f"Gemini failed: {self.failures['gemini']}")
-        return " | ".join(parts) if parts else "No AI provider is configured."
+    def __init__(self, failures: dict):
+        self.failures = failures
+        super().__init__(str(failures))
 
 
-def generate_with_gemini(prompt):
-    last_error = None
-    if not gemini_client:
-        return None, last_error
-
-    for model in dict.fromkeys(MODEL_FALLBACKS):
-        try:
-            response = gemini_client.models.generate_content(
-                model=model,
-                contents=prompt
-            )
-            return response.text if response and response.text else "", None
-        except Exception as e:
-            last_error = e
-            logger.warning(f"Gemini model {model} failed: {e}")
-
-    return None, last_error
-
-
-def generate_with_groq(prompt):
-    last_error = None
+# =========================
+# GROQ TEXT GENERATION
+# =========================
+def generate_text(prompt, system_instruction=None):
     if not groq_client:
-        return None, last_error
+        raise ProviderFailure({"groq": "GROQ_API_KEY missing"})
 
-    for model in dict.fromkeys(GROQ_MODEL_FALLBACKS):
-        try:
-            response = groq_client.chat.completions.create(
-                model=model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": "You are Justin AI. Be helpful, concise, and respond in the user's language."
-                    },
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.7
-            )
-            return response.choices[0].message.content or "", None
-        except Exception as e:
-            last_error = e
-            logger.warning(f"Groq model {model} failed: {e}")
+    system_message = (
+        "You are Justin AI. Be helpful, concise, and respond in the user's language."
+    )
 
-    return None, last_error
+    if system_instruction:
+        system_message += f" {system_instruction}"
 
+    try:
+        response = groq_client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": system_message},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=1024
+        )
 
-def generate_text(prompt):
-    failures = {}
-    providers = ("gemini", "groq") if AI_PROVIDER == "gemini" else ("groq", "gemini")
+        return response.choices[0].message.content
 
-    for provider in providers:
-        if provider == "groq":
-            text, error = generate_with_groq(prompt)
-        else:
-            text, error = generate_with_gemini(prompt)
-
-        if text is not None:
-            return text
-        if error:
-            failures[provider] = error
-        elif provider == "groq" and not groq_client:
-            failures[provider] = "GROQ_API_KEY is missing or the openai package is not installed."
-        elif provider == "gemini" and not gemini_client:
-            failures[provider] = "GEMINI_API_KEY is missing."
-
-    raise ProviderFailure(failures)
+    except Exception as e:
+        logger.error(f"Groq error: {e}")
+        raise ProviderFailure({"groq": str(e)})
 
 
+# =========================
+# DURATION HANDLING
+# =========================
 def requested_duration_seconds(message, default_seconds=30):
     text = message.lower()
-    if any(phrase in text for phrase in [
-        "90 seconds",
-        "ninety seconds",
-        "one and a half minutes",
-        "one minute and a half",
-        "1.5 minutes",
-        "at least 90"
-    ]):
-        return 90
 
-    minute_match = re.search(r"(\d+(?:\.\d+)?)\s*(?:minute|minutes|min|mins)\b", text)
+    minute_match = re.search(r"(\d+(?:\.\d+)?)\s*(minute|min|minutes)", text)
     if minute_match:
         return max(default_seconds, int(float(minute_match.group(1)) * 60))
 
-    second_match = re.search(r"(\d+)\s*(?:second|seconds|sec|secs)\b", text)
+    second_match = re.search(r"(\d+)\s*(second|seconds)", text)
     if second_match:
         return max(default_seconds, int(second_match.group(1)))
 
@@ -170,8 +110,6 @@ def requested_duration_seconds(message, default_seconds=30):
 def expand_to_duration(text, min_seconds):
     target_words = max(80, int(min_seconds * WORDS_PER_SECOND))
     words = text.split()
-    if not words:
-        return text
 
     if len(words) >= target_words:
         return text
@@ -180,144 +118,171 @@ def expand_to_duration(text, min_seconds):
     return " ".join((words * repeats)[:target_words])
 
 
-def save_image(prompt):
+# =========================
+# IMAGE GENERATION (PLACEHOLDER SAFE)
+# =========================
+def save_placeholder_image(prompt):
     filename = f"image_{uuid.uuid4().hex}.png"
     path = os.path.join(GENERATED_DIR, filename)
-    image = Image.new("RGB", IMAGE_SIZE, color=(25, 40, 70))
+
+    image = Image.new("RGB", IMAGE_SIZE, color=(30, 40, 60))
     draw = ImageDraw.Draw(image)
+
     try:
         font = ImageFont.truetype("arial.ttf", 24)
-    except Exception:
+    except:
         font = ImageFont.load_default()
+
     lines = []
     words = prompt.split()
     line = ""
+
     for word in words:
         if len(line + " " + word) > 40:
-            lines.append(line.strip())
+            lines.append(line)
             line = word
         else:
             line += " " + word if line else word
+
     if line:
         lines.append(line)
-    y = 30
-    for line in lines[:18]:
-        draw.text((30, y), line, font=font, fill=(240, 240, 240))
-        y += 34
-    draw.rectangle([(20, 20), (IMAGE_SIZE[0] - 20, IMAGE_SIZE[1] - 20)], outline=(95, 155, 230), width=4)
+
+    y = 40
+    for l in lines[:15]:
+        draw.text((30, y), l, font=font, fill=(255, 255, 255))
+        y += 30
+
     image.save(path)
     return f"/static/generated/{filename}"
 
 
-def save_audio(prompt, min_seconds=90):
-    text_prompt = f"Create a long spoken narrative of at least {min_seconds} seconds about: {prompt}"
+def save_image(prompt):
+    # No real AI image (Groq does not generate images)
+    return save_placeholder_image(prompt)
+
+
+# =========================
+# AUDIO (GROQ + gTTS)
+# =========================
+def save_audio(prompt, min_seconds=30):
+    text_prompt = f"Explain in detail for a voice narration: {prompt}"
+
     try:
-        narration = generate_text(text_prompt).strip()
-    except Exception as e:
-        logger.warning(f"Failed to get expanded audio text: {e}")
+        narration = generate_text(
+            text_prompt,
+            system_instruction=language_instruction(prompt)
+        ).strip()
+    except Exception:
         narration = prompt
 
     narration = expand_to_duration(narration, min_seconds)
 
-    filename = f"audio_{uuid.uuid4().hex}.wav"
+    filename = f"audio_{uuid.uuid4().hex}.mp3"
     path = os.path.join(GENERATED_DIR, filename)
-    engine = pyttsx3.init()
-    engine.setProperty("rate", 150)
-    engine.save_to_file(narration, path)
-    engine.runAndWait()
+
+    tts = gTTS(text=narration, lang="en")
+    tts.save(path)
+
     return f"/static/generated/{filename}"
 
 
-def save_video(prompt, min_seconds=90):
-    image_url = save_image(prompt + " video background")
-    audio_url = save_audio(prompt, min_seconds=min_seconds)
-    image_path = os.path.join(BASE_DIR, image_url.replace("/static/", "static/"))
-    audio_path = os.path.join(BASE_DIR, audio_url.replace("/static/", "static/"))
+# =========================
+# VIDEO (OPTIONAL)
+# =========================
+def save_video(prompt, min_seconds=30):
+    if not MOVIEPY_AVAILABLE:
+        raise RuntimeError("MoviePy not installed")
+
+    image_url = save_image(prompt)
+    audio_url = save_audio(prompt, min_seconds)
+
+    image_path = os.path.join(BASE_DIR, image_url.lstrip("/"))
+    audio_path = os.path.join(BASE_DIR, audio_url.lstrip("/"))
+
     filename = f"video_{uuid.uuid4().hex}.mp4"
     path = os.path.join(GENERATED_DIR, filename)
 
-    if not MOVIEPY_AVAILABLE:
-        raise RuntimeError("Video generation requires moviepy library. Install moviepy to generate video files.")
+    clip = ImageClip(image_path).set_duration(min_seconds)
 
-    clip = ImageClip(image_path)
-    if hasattr(clip, "with_duration"):
-        clip = clip.with_duration(min_seconds)
-    else:
-        clip = clip.set_duration(min_seconds)
-
-    audio_clip = None
     try:
-        audio_clip = AudioFileClip(audio_path)
-        if hasattr(clip, "with_audio"):
-            clip = clip.with_audio(audio_clip)
-        else:
-            clip = clip.set_audio(audio_clip)
-    except Exception:
+        audio = AudioFileClip(audio_path)
+        clip = clip.set_audio(audio)
+    except:
         pass
-    try:
-        clip.write_videofile(path, fps=24, codec="libx264", audio_codec="aac", logger=None)
-    finally:
-        clip.close()
-        if audio_clip:
-            audio_clip.close()
+
+    clip.write_videofile(path, fps=24, codec="libx264", audio_codec="aac", logger=None)
+
     return f"/static/generated/{filename}"
 
 
+# =========================
+# MEDIA DETECTION
+# =========================
 def is_media_request(message):
     text = message.lower()
-    if any(word in text for word in ["generate image", "create image", "make image", "image of", "draw", "picture of", "illustration"]):
+
+    if any(k in text for k in ["image", "draw", "illustration"]):
         return "image"
-    if any(word in text for word in ["generate audio", "create audio", "make audio", "audio of", "voice message", "voice note", "recording", "mp3", "wav"]):
+
+    if any(k in text for k in ["audio", "voice", "sound"]):
         return "audio"
-    if any(word in text for word in ["generate video", "create video", "make video", "video of", "movie", "film"]):
+
+    if any(k in text for k in ["video", "movie"]):
         return "video"
+
     return None
 
 
+# =========================
+# MAIN RESPONSE ENGINE
+# =========================
 def get_response(user_message, thread_id):
     try:
+        lang = detect_language(user_message)
         media_type = is_media_request(user_message)
         min_seconds = requested_duration_seconds(user_message)
 
+        # IMAGE
         if media_type == "image":
-            media_url = save_image(user_message)
             return {
-                "text": "Here is your generated image.",
+                "text": localized_message("image_ready", lang),
                 "media_type": "image",
-                "media_url": media_url
+                "media_url": save_image(user_message)
             }
 
+        # AUDIO
         if media_type == "audio":
-            media_url = save_audio(user_message, min_seconds=min_seconds)
             return {
-                "text": f"Here is your generated audio file ({min_seconds} seconds requested).",
+                "text": localized_message("audio_ready", lang),
                 "media_type": "audio",
-                "media_url": media_url
+                "media_url": save_audio(user_message, min_seconds)
             }
 
+        # VIDEO
         if media_type == "video":
             try:
-                media_url = save_video(user_message, min_seconds=min_seconds)
                 return {
-                    "text": f"Here is your generated video ({min_seconds} seconds requested).",
+                    "text": localized_message("video_ready", lang),
                     "media_type": "video",
-                    "media_url": media_url
+                    "media_url": save_video(user_message, min_seconds)
                 }
             except Exception as e:
                 return {
-                    "text": f"Video generation failed: {str(e)}",
+                    "text": "Video generation failed",
                     "media_type": None,
                     "media_url": None
                 }
 
+        # CHAT HISTORY
         chats = get_chats(thread_id)
-        history = "\n".join([f"User: {msg}\nAI: {reply}" for msg, reply, *_ in chats[-10:] if msg])
-        if history:
-            prompt = f"Conversation history:\n{history}\n\nPlease respond to the following user message in the same language that the user used. User message: {user_message}"
-        else:
-            prompt = f"Please respond to the following message: {user_message}"
+        history = "\n".join([f"User: {m}\nAI: {r}" for m, r, *_ in chats[-10:] if m])
 
-        ai_text = generate_text(prompt) or "Sorry, I couldn't generate a response. Please try again."
+        prompt = (
+            f"Conversation:\n{history}\n\nUser: {user_message}"
+            if history else user_message
+        )
+
+        ai_text = generate_text(prompt)
 
         return {
             "text": ai_text,
@@ -326,31 +291,17 @@ def get_response(user_message, thread_id):
         }
 
     except ProviderFailure as e:
-        logger.error(f"AI provider failure: {e}")
-        failures = {key: str(value) for key, value in e.failures.items()}
-        groq_error = failures.get("groq", "")
-        gemini_error = failures.get("gemini", "")
-        if "GROQ_API_KEY" in groq_error:
-            message = "Groq is not configured on this website. Add GROQ_API_KEY and AI_PROVIDER=groq in your hosting environment variables, then redeploy."
-        elif "Incorrect API key" in groq_error or "invalid_api_key" in groq_error or "401" in groq_error:
-            message = "Groq rejected the API key. Check GROQ_API_KEY in your hosting environment variables."
-        elif "model" in groq_error.lower() and groq_error:
-            message = f"Groq is configured but the model failed. Try setting GROQ_MODEL to llama-3.1-8b-instant. Details: {groq_error}"
-        elif "RESOURCE_EXHAUSTED" in gemini_error or "429" in gemini_error:
-            message = "Gemini quota is exhausted and Groq did not return a response. Check your GROQ_API_KEY on the website."
-        else:
-            message = f"AI providers failed. {str(e)}"
-        return {"text": message, "media_type": None, "media_url": None}
-    except ValueError as e:
-        logger.error(f"API Key Error: {str(e)}")
-        return {"text": f"Configuration Error: {str(e)}", "media_type": None, "media_url": None}
+        logger.error(e)
+        return {
+            "text": "AI service temporarily unavailable. Try again.",
+            "media_type": None,
+            "media_url": None
+        }
+
     except Exception as e:
-        logger.error(f"Error getting response: {str(e)}")
-        error_text = str(e)
-        if "RESOURCE_EXHAUSTED" in error_text or "429" in error_text:
-            return {
-                "text": "The AI provider quota is exhausted. Please make sure GROQ_API_KEY is set on the website so Justin AI can use Groq instead.",
-                "media_type": None,
-                "media_url": None
-            }
-        return {"text": f"Error: {error_text}", "media_type": None, "media_url": None}
+        logger.error(e)
+        return {
+            "text": "Unexpected error occurred.",
+            "media_type": None,
+            "media_url": None
+        }
