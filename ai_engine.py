@@ -4,6 +4,7 @@ import os
 import uuid
 import logging
 import re
+from dataclasses import dataclass
 from database import get_chats
 from PIL import Image, ImageDraw, ImageFont
 import pyttsx3
@@ -63,6 +64,19 @@ GROQ_MODEL_FALLBACKS = [
 ]
 
 
+@dataclass
+class ProviderFailure(Exception):
+    failures: dict
+
+    def __str__(self):
+        parts = []
+        if "groq" in self.failures:
+            parts.append(f"Groq failed: {self.failures['groq']}")
+        if "gemini" in self.failures:
+            parts.append(f"Gemini failed: {self.failures['gemini']}")
+        return " | ".join(parts) if parts else "No AI provider is configured."
+
+
 def generate_with_gemini(prompt):
     last_error = None
     if not gemini_client:
@@ -109,7 +123,7 @@ def generate_with_groq(prompt):
 
 
 def generate_text(prompt):
-    last_error = None
+    failures = {}
     providers = ("gemini", "groq") if AI_PROVIDER == "gemini" else ("groq", "gemini")
 
     for provider in providers:
@@ -121,11 +135,13 @@ def generate_text(prompt):
         if text is not None:
             return text
         if error:
-            last_error = error
+            failures[provider] = error
+        elif provider == "groq" and not groq_client:
+            failures[provider] = "GROQ_API_KEY is missing or the openai package is not installed."
+        elif provider == "gemini" and not gemini_client:
+            failures[provider] = "GEMINI_API_KEY is missing."
 
-    if last_error:
-        raise last_error
-    raise ValueError("No AI provider is configured. Set GEMINI_API_KEY or GROQ_API_KEY in .env.")
+    raise ProviderFailure(failures)
 
 
 def requested_duration_seconds(message, default_seconds=30):
@@ -309,6 +325,22 @@ def get_response(user_message, thread_id):
             "media_url": None
         }
 
+    except ProviderFailure as e:
+        logger.error(f"AI provider failure: {e}")
+        failures = {key: str(value) for key, value in e.failures.items()}
+        groq_error = failures.get("groq", "")
+        gemini_error = failures.get("gemini", "")
+        if "GROQ_API_KEY" in groq_error:
+            message = "Groq is not configured on this website. Add GROQ_API_KEY and AI_PROVIDER=groq in your hosting environment variables, then redeploy."
+        elif "Incorrect API key" in groq_error or "invalid_api_key" in groq_error or "401" in groq_error:
+            message = "Groq rejected the API key. Check GROQ_API_KEY in your hosting environment variables."
+        elif "model" in groq_error.lower() and groq_error:
+            message = f"Groq is configured but the model failed. Try setting GROQ_MODEL to llama-3.1-8b-instant. Details: {groq_error}"
+        elif "RESOURCE_EXHAUSTED" in gemini_error or "429" in gemini_error:
+            message = "Gemini quota is exhausted and Groq did not return a response. Check your GROQ_API_KEY on the website."
+        else:
+            message = f"AI providers failed. {str(e)}"
+        return {"text": message, "media_type": None, "media_url": None}
     except ValueError as e:
         logger.error(f"API Key Error: {str(e)}")
         return {"text": f"Configuration Error: {str(e)}", "media_type": None, "media_url": None}
