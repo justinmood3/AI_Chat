@@ -1,0 +1,17 @@
+import sqlite3
+conn = sqlite3.connect('database.db')
+cursor = conn.cursor()
+cursor.execute('SELECT name FROM sqlite_master WHERE type="table"')
+tables = cursor.fetchall()
+print("Tables:", tables)
+for table in tables:
+    cursor.execute(f'PRAGMA table_info({table[0]})')
+    columns = cursor.fetchall()
+    print(f"Columns in {table[0]}:", columns)
+cursor.execute('SELECT * FROM users')
+users = cursor.fetchall()
+print("Users:", users)
+cursor.execute('SELECT * FROM chats LIMIT 5')
+chats = cursor.fetchall()
+print("Chats:", chats)
+conn.close()

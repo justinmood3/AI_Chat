@@ -1,0 +1,24 @@
+You: i have stress
+AI: Try breathing: inhale 4s, hold 4s, exhale 4s.
+
+You: i sick a headache what to do now
+AI: I am still learning. Try asking about study, stress, or money.
+
+You: how i can get money
+AI: Learn coding or freelancing skills to earn online.
+
+You: hello
+AI: mental_health
+
+You: i have stress
+AI: mental_health
+
+You: 
+AI: mental_health
+
+You: i have stress
+AI: mental_health
+
+You: hi
+AI: mental_health
+

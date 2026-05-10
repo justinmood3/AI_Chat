@@ -1,0 +1,16 @@
+import sqlite3
+
+conn = sqlite3.connect("ai.db")
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS memory (
+    id INTEGER PRIMARY KEY,
+    user TEXT,
+    ai TEXT
+)
+""")
+
+def save(user, ai):
+    cursor.execute("INSERT INTO memory (user, ai) VALUES (?, ?)", (user, ai))
+    conn.commit()

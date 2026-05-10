@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='1.png') }}">
+    <title>Justin AI</title>
+    <title>Login - Justin AI</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <h1>🤖 Justin AI</h1>
+        <p>Please sign in to continue</p>
+        <a href="/google_login" class="google-btn">Continue with Google</a>
+        <p>Or</p>
+        <h2>Sign In with Email</h2>
+        <form method="POST" action="/login_email">
+            <input type="email" name="email" placeholder="Email" required><br><br>
+            <input type="password" name="password" placeholder="Password" required><br><br>
+            <button type="submit">Sign In</button>
+        </form>
+        <p>Don't have an account? <a href="/register">Sign Up</a></p>
+        {% with messages = get_flashed_messages() %}
+            {% if messages %}
+                <ul>
+                    {% for message in messages %}
+                        <li>{{ message }}</li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+        {% endwith %}
+    </div>
+</body>
+</html>

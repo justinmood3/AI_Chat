@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='1.png') }}">
+    <title>Justin AI</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+
+<body>
+
+<div class="app-shell">
+    <aside class="sidebar">
+        <div class="brand-row">
+            <div class="brand-mark">J</div>
+            <div>
+                <h1>Justin AI</h1>
+                <p>Assistant workspace</p>
+            </div>
+        </div>
+
+        <form method="POST" action="/new_thread" class="new-chat-form">
+            <input type="text" name="title" placeholder="New chat title">
+            <button type="submit">New</button>
+        </form>
+
+        <nav class="thread-list" aria-label="Chats">
+            {% for thread in threads %}
+                <a class="thread-link {% if current_thread and current_thread[0] == thread[0] %}active{% endif %}" href="/select_thread/{{ thread[0] }}">
+                    <span>{{ thread[1] }}</span>
+                </a>
+            {% endfor %}
+        </nav>
+
+        <a href="/logout" class="logout-link">Logout</a>
+    </aside>
+
+    <main class="chat-panel">
+        {% if current_thread %}
+            <header class="chat-header">
+                <div>
+                    <p class="eyebrow">Current chat</p>
+                    <h2>{{ current_thread[1] }}</h2>
+                </div>
+                <div class="status-pill">Ready</div>
+            </header>
+
+            <div class="chat-box" id="chat-box">
+                {% for chat in chats %}
+                    {% if chat[0] %}
+                    <div class="message-row user-row">
+                        <div class="message user-message">
+                            <div class="message-label">You</div>
+                            <div>{{ chat[0] }}</div>
+                        </div>
+                    </div>
+                    {% endif %}
+                    <div class="message-row ai-row">
+                        <div class="avatar">AI</div>
+                        <div class="message ai-message">
+                            <div class="message-label">
+                                Justin AI
+                                <button type="button" class="speak-message" data-text="{{ chat[1]|e }}">🎤</button>
+                            </div>
+                            <span class="ai-text">{{ chat[1] }}</span>
+                            {% if chat[2] and chat[3] %}
+                                <div class="generated-media-wrapper">
+                                    {% if chat[2] == 'image' %}
+                                        <img src="{{ chat[3] }}" class="generated-media" alt="Generated image">
+                                    {% elif chat[2] == 'audio' %}
+                                        <audio controls class="generated-media" src="{{ chat[3] }}"></audio>
+                                    {% elif chat[2] == 'video' %}
+                                        <video controls class="generated-media" src="{{ chat[3] }}"></video>
+                                    {% endif %}
+                                </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                {% endfor %}
+            </div>
+
+            <section class="composer-area">
+                <div class="voice-chat-panel">
+                    <label>
+                        <input type="checkbox" id="auto-send-voice">
+                        Auto-send voice
+                    </label>
+                    <label>
+                        <input type="checkbox" id="speak-replies" checked>
+                        Speak replies
+                    </label>
+                    <button type="button" id="stop-speech" class="secondary-button">Stop voice</button>
+                </div>
+                <form method="POST" action="/chat" id="chat-form" class="chat-form">
+                    <input type="text" name="message" id="message-input" placeholder="Message Justin AI..." required>
+                    <button type="button" id="voice-button" class="voice-button">Mic</button>
+                    <button type="submit" class="send-button">Send</button>
+                </form>
+                <p class="hint">Try: generate image, generate audio, or generate video. Add "90 seconds" for longer audio or video.</p>
+            </section>
+        {% else %}
+            <section class="empty-state">
+                <h2>Select or create a chat</h2>
+                <p>Start a conversation from the sidebar.</p>
+            </section>
+        {% endif %}
+    </main>
+</div>
+
+<script>
+    const chatBox = document.getElementById('chat-box');
+    if (chatBox) {
+        chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    const messageInput = document.getElementById('message-input');
+    const chatForm = document.getElementById('chat-form');
+    if (messageInput) {
+        messageInput.focus();
+    }
+
+    const voiceButton = document.getElementById('voice-button');
+    const autoSendVoice = document.getElementById('auto-send-voice');
+    const speakReplies = document.getElementById('speak-replies');
+    const stopSpeech = document.getElementById('stop-speech');
+
+    function speakText(text) {
+        if (!('speechSynthesis' in window) || !text) {
+            return;
+        }
+        window.speechSynthesis.cancel();
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.rate = 1;
+        utterance.pitch = 1;
+        window.speechSynthesis.speak(utterance);
+    }
+
+    document.querySelectorAll('.speak-message').forEach((button) => {
+        button.addEventListener('click', () => speakText(button.dataset.text));
+    });
+
+    if (stopSpeech) {
+        stopSpeech.addEventListener('click', () => {
+            if ('speechSynthesis' in window) {
+                window.speechSynthesis.cancel();
+            }
+        });
+    }
+
+    if (speakReplies && speakReplies.checked) {
+        const aiMessages = document.querySelectorAll('.ai-text');
+        const latestReply = aiMessages[aiMessages.length - 1];
+        if (latestReply && latestReply.textContent.trim()) {
+            speakText(latestReply.textContent.trim());
+        }
+    }
+
+    if (voiceButton && (window.SpeechRecognition || window.webkitSpeechRecognition)) {
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+        const recognition = new SpeechRecognition();
+        recognition.lang = 'en-US';
+        recognition.interimResults = false;
+        recognition.maxAlternatives = 1;
+
+        voiceButton.addEventListener('click', () => {
+            voiceButton.textContent = 'Listening';
+            voiceButton.disabled = true;
+            recognition.start();
+        });
+
+        recognition.addEventListener('result', (event) => {
+            const transcript = event.results[0][0].transcript;
+            if (messageInput) {
+                messageInput.value = transcript;
+            }
+            if (autoSendVoice && autoSendVoice.checked && chatForm) {
+                chatForm.submit();
+            }
+        });
+
+        recognition.addEventListener('end', () => {
+            voiceButton.textContent = 'Mic';
+            voiceButton.disabled = false;
+        });
+
+        recognition.addEventListener('error', () => {
+            voiceButton.textContent = 'Mic';
+            voiceButton.disabled = false;
+        });
+    } else if (voiceButton) {
+        voiceButton.disabled = true;
+        voiceButton.textContent = 'No mic';
+    }
+</script>
+
+</body>
+</html>
